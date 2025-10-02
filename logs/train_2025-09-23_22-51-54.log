@@ -1,0 +1,247 @@
+[train] All preprocessed files exist.
+[val] All preprocessed files exist.
+[test] All preprocessed files exist.
+[train] All graphs exist !
+[val] All graphs exist !
+[test] All graphs exist !
+[train] Start to process neighbors list
+/home/zhuzy/projects/GLORY_simple/src/dataload/data_preprocess.py:365: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  graph_data = torch.load(target_graph_path)
+[train] All news Neighbor dict exist !
+[val] Start to process neighbors list
+[val] All news Neighbor dict exist !
+[test] Start to process neighbors list
+[test] All news Neighbor dict exist !
+[train] Neighbor vectors exist; skip.
+[val] Neighbor vectors exist; skip.
+[train] Entity graph exists!
+[val] Entity graph exists!
+[test] Entity graph exists!
+[train] Start to process neighbors list
+/home/zhuzy/projects/GLORY_simple/src/dataload/data_preprocess.py:386: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  graph_data = torch.load(target_graph_path)
+[train] All entity Neighbor dict exist !
+[val] Start to process neighbors list
+[val] All entity Neighbor dict exist !
+[test] Start to process neighbors list
+[test] All entity Neighbor dict exist !
+开始训练！
+/home/zhuzy/projects/GLORY_simple/src/dataload/data_load.py:28: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  news_graph = torch.load(Path(data_dir[mode]) / "nltk_news_graph.pt")
+/home/zhuzy/projects/GLORY_simple/src/main.py:373: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = amp.GradScaler()  #利用混和精度减少GPU计算的手段
+wandb: Tracking run with wandb version 0.21.4
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in /home/zhuzy/projects/GLORY_simple/wandb/offline-run-20250923_225211-sxrhnq1n
+/home/zhuzy/projects/GLORY_simple/src/main.py:46: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  outputs_dict = torch.load(bf, map_location=torch.device(f'cuda:{local_rank}'))
+[train] News Graph Info: Data(x=[51283, 38], edge_index=[2, 636901], edge_attr=[636901], num_nodes=51283)
+[train] entity_neighbor list Length: 850165
+-----------------------------------------------------
+Dict length: 17585
+Have words: 17042 (cached)
+Missing rate: 0.030878589707136764
+-----------------------------------------------------
+Dict length: 37533
+Have words: 30806 (cached)
+Missing rate: 0.17922894519489516
+DistributedDataParallel(
+  (module): GLORY(
+    (local_news_encoder): NewsEncoder(
+      (word_encoder): Embedding(37534, 300, padding_idx=0)
+      (attention): Sequential(
+        (0) - Dropout(p=0.2, inplace=False): x -> x
+        (1) - MultiHeadAttention(
+        (W_Q): Linear(in_features=1000, out_features=1000, bias=True)
+        (W_K): Linear(in_features=1000, out_features=1000, bias=False)
+        (W_V): Linear(in_features=1000, out_features=1000, bias=True)
+        (scaled_dot_product_attn): ScaledDotProductAttention()
+      ): x, x, x, mask -> x
+        (2) - LayerNorm((1000,), eps=1e-05, elementwise_affine=True): x -> x
+        (3) - Dropout(p=0.2, inplace=False): x -> x
+        (4) - AttentionPooling(
+        (att_fc1): Linear(in_features=1000, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x, mask -> x
+        (5) - LayerNorm((1000,), eps=1e-05, elementwise_affine=True): x -> x
+      )
+      (last_encoder): Linear(in_features=1000, out_features=400, bias=True)
+      (attetio): Sequential(
+        (0) - Dropout(p=0.2, inplace=False): x -> x
+        (1) - MultiHeadAttention(
+        (W_Q): Linear(in_features=300, out_features=400, bias=True)
+        (W_K): Linear(in_features=300, out_features=400, bias=False)
+        (W_V): Linear(in_features=300, out_features=400, bias=True)
+        (scaled_dot_product_attn): ScaledDotProductAttention()
+      ): x, x, x, mask -> x
+        (2) - LayerNorm((400,), eps=1e-05, elementwise_affine=True): x -> x
+        (3) - Dropout(p=0.2, inplace=False): x -> x
+        (4) - AttentionPooling(
+        (att_fc1): Linear(in_features=400, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x, mask -> x
+        (5) - LayerNorm((400,), eps=1e-05, elementwise_affine=True): x -> x
+      )
+    )
+    (global_news_short_encoder): Sequential(
+      (0) - GatedGraphConv(400, num_layers=3): x, index -> x
+    )
+    (global_news_long_encoder): GlobalNewsLongEncoder(
+      (mha): MultiHeadAttention(
+        (W_Q): Linear(in_features=400, out_features=400, bias=True)
+        (W_K): Linear(in_features=400, out_features=400, bias=False)
+        (W_V): Linear(in_features=400, out_features=400, bias=True)
+        (scaled_dot_product_attn): ScaledDotProductAttention()
+      )
+      (dropout): Dropout(p=0.2, inplace=False)
+      (ln_after_flat): LayerNorm((400,), eps=1e-05, elementwise_affine=True)
+      (pool): AttentionPooling(
+        (att_fc1): Linear(in_features=400, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      )
+      (ln_out): LayerNorm((400,), eps=1e-05, elementwise_affine=True)
+    )
+    (entity_embedding_layer): Embedding(17586, 100, padding_idx=0)
+    (local_entity_encoder): Sequential(
+      (0) - Embedding(17586, 100, padding_idx=0): x -> x
+      (1) - EntityEncoder(
+      (atte): Sequential(
+        (0) - Dropout(p=0.2, inplace=False): x -> x
+        (1) - MultiHeadAttention(
+        (W_Q): Linear(in_features=100, out_features=100, bias=True)
+        (W_K): Linear(in_features=100, out_features=100, bias=False)
+        (W_V): Linear(in_features=100, out_features=100, bias=True)
+        (scaled_dot_product_attn): ScaledDotProductAttention()
+      ): x, x, x, mask -> x
+        (2) - LayerNorm((100,), eps=1e-05, elementwise_affine=True): x -> x
+        (3) - Dropout(p=0.2, inplace=False): x -> x
+        (4) - AttentionPooling(
+        (att_fc1): Linear(in_features=100, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x, mask -> x
+        (5) - LayerNorm((100,), eps=1e-05, elementwise_affine=True): x -> x
+        (6) - Linear(in_features=100, out_features=400, bias=True): x -> x
+        (7) - LeakyReLU(negative_slope=0.2): x -> x
+      )
+    ): x, mask -> x
+    )
+    (global_entity_encoder): Sequential(
+      (0) - Embedding(17586, 100, padding_idx=0): x -> x
+      (1) - GlobalEntityEncoder(
+      (atte): Sequential(
+        (0) - Dropout(p=0.2, inplace=False): x -> x
+        (1) - MultiHeadAttention(
+        (W_Q): Linear(in_features=100, out_features=400, bias=True)
+        (W_K): Linear(in_features=100, out_features=400, bias=False)
+        (W_V): Linear(in_features=100, out_features=400, bias=True)
+        (scaled_dot_product_attn): ScaledDotProductAttention()
+      ): x, x, x, mask -> x
+        (2) - LayerNorm((400,), eps=1e-05, elementwise_affine=True): x -> x
+        (3) - Dropout(p=0.2, inplace=False): x -> x
+        (4) - AttentionPooling(
+        (att_fc1): Linear(in_features=400, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x, mask -> x
+        (5) - LayerNorm((400,), eps=1e-05, elementwise_affine=True): x -> x
+      )
+    ): x, mask -> x
+    )
+    (feature_gate): FeatureGate(
+      (f_dense): Linear(in_features=800, out_features=400, bias=True)
+      (g_dense): Linear(in_features=800, out_features=400, bias=True)
+    )
+    (click_encoder): ClickEncoder(
+      (atte): Sequential(
+        (0) - <function ClickEncoder.__init__.<locals>.<lambda> at 0x7f2c6f8b3130>: a, b, c -> x
+        (1) - AttentionPooling(
+        (att_fc1): Linear(in_features=400, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x -> x
+      )
+    )
+    (user_encoder): UserEncoder(
+      (atte): Sequential(
+        (0) - MultiHeadAttention(
+        (W_Q): Linear(in_features=400, out_features=400, bias=True)
+        (W_K): Linear(in_features=400, out_features=400, bias=False)
+        (W_V): Linear(in_features=400, out_features=400, bias=True)
+        (scaled_dot_product_attn): ScaledDotProductAttention()
+      ): x, x, x, mask -> x
+        (1) - AttentionPooling(
+        (att_fc1): Linear(in_features=400, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x, mask -> x
+      )
+    )
+    (candidate_encoder): CandidateEncoder(
+      (atte): Sequential(
+        (0) - <function CandidateEncoder.__init__.<locals>.<lambda> at 0x7f2c6f8b2a70>: a, b, c -> x
+        (1) - AttentionPooling(
+        (att_fc1): Linear(in_features=400, out_features=200, bias=True)
+        (att_fc2): Linear(in_features=200, out_features=1, bias=True)
+      ): x -> x
+        (2) - Linear(in_features=400, out_features=400, bias=True): x -> x
+        (3) - LeakyReLU(negative_slope=0.2): x -> x
+      )
+    )
+    (click_predictor): DotProduct()
+    (loss_fn): NCELoss()
+  )
+)
+[0] Training:   0%|          | 0/36930 [00:00<?, ?it/s][DEBUG] reading behaviors_path: /home/zhuzy/projects/GLORY_simple/N/A
+[DEBUG] opening filename     : /home/zhuzy/projects/GLORY_simple/data/MINDsmall_bots_strong/train/behaviors_np4_0.tsv
+/home/zhuzy/projects/GLORY_simple/src/main.py:84: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with amp.autocast():#自动混合精度训练的一部分，可以提高训练速度和效率。它会自动将某些操作从单精度（float32）转换为半精度（float16），这样做的好处是可以加快计算速度，减少内存使用
+[0] Training:   0%|          | 0/36930 [00:02<?, ?it/s]
+[1;34mwandb[0m: 
+[1;34mwandb[0m: You can sync this run to the cloud by running:
+[1;34mwandb[0m: [1mwandb sync /home/zhuzy/projects/GLORY_simple/wandb/offline-run-20250923_225211-sxrhnq1n[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/offline-run-20250923_225211-sxrhnq1n/logs[0m
+Error executing job with overrides: ['dataset.train_dir=/home/zhuzy/projects/GLORY_simple/data/MINDsmall_bots_strong/train', 'dataset.val_dir=/home/zhuzy/projects/GLORY_simple/data/MINDsmall_bots_strong/val', 'dataset.test_dir=/home/zhuzy/projects/GLORY_simple/data/MINDsmall_bots_strong/test', 'dataset.dataset_lang=english', 'reprocess=false', 'reprocess_neighbors=false']
+Traceback (most recent call last):
+  File "/home/zhuzy/projects/GLORY_simple/src/main.py", line 401, in main
+    mp.spawn(main_worker, nprocs=cfg.gpu_num, args=(cfg,)) #mp.spawn主要用于多进程处理
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/multiprocessing/spawn.py", line 328, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/multiprocessing/spawn.py", line 284, in start_processes
+    while not context.join():
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/multiprocessing/spawn.py", line 203, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 0 terminated with the following error:
+Traceback (most recent call last):
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/multiprocessing/spawn.py", line 90, in _wrap
+    fn(i, *args)
+  File "/home/zhuzy/projects/GLORY_simple/src/main.py", line 385, in main_worker
+    train(model, optimizer, scaler, scheduler, train_dataloader, local_rank, cfg, early_stopping)
+  File "/home/zhuzy/projects/GLORY_simple/src/main.py", line 85, in train
+    bz_loss, y_hat = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask,outputs_dict,trimmed_news_neighbors_dict, labels)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1643, in forward
+    else self._run_ddp_forward(*inputs, **kwargs)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1459, in _run_ddp_forward
+    return self.module(*inputs, **kwargs)  # type: ignore[index]
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zhuzy/projects/GLORY_simple/src/models/GLORY.py", line 134, in forward
+    global_long_emb  = self.global_news_long_encoder(clicked_origin_emb, click_history, outputs_dict, trimmed_news_neighbors_dict)  # [16,50,400] 16记录，50条阅读记录，
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zhuzy/projects/GLORY_simple/src/models/component/global_news_long_encoder.py", line 145, in forward
+    x = self.pool(x, mask=None)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zhuzy/miniconda3/envs/glocim/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+TypeError: AttentionPooling.forward() got an unexpected keyword argument 'mask'
+
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

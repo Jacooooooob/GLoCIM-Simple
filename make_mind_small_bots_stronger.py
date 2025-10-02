@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Stronger Bots for MIND-small
+============================
+
+本脚本在 *不改内容层*（news.tsv & entity/relation embeddings 原样拷贝）的前提下，
+向 behaviors.tsv 注入更“有说服力”的水军/机器人行为，以便做鲁棒性与对抗实验。
+
+关键特性：
+- 硬协同（hard coordination）：爆发块内强制同一目标 news（真正“多人同刻同标的”）。
+- 历史累积（accumulate history）：同一机器人账号在后续曝光中携带之前点过的正样本。
+- 剂量与集中度可调：bot_ratio_*、campaign_k、click_bias、burst_frac、burst_size。
+- 干净验证：默认只污染 train（val/test 默认 0.00，可自行设定）。
+- 稳定种子：split_seed = base_seed + {train:0, val:1, test:2}。
+- 可选跨主题造桥（cross_topic）：若 news.tsv 有 category/subcategory，爆发块轮换不同类目标。
+
+输出：
+- 每个 split（train/val/test）目录下：
+  - behaviors.tsv（原始 + 新增，按时间排序并重排 impression_id）
+  - 复制 news.tsv、entity_embedding.vec、relation_embedding.vec
+  - bot_users.txt（本 split 生成的新账号列表）
+  - campaign_news.txt（本 split 的活动目标集合）
+  - meta.json（记录关键参数与统计）
+
+用法：
+  python make_mind_small_bots_stronger.py --src_dir ... --dst_dir ...
+"""
+
+import argparse
+import csv
+import json
+import os
+import random
+import re
+import shutil
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+import pandas as pd
+
+TS_FMT = "%m/%d/%Y %I:%M:%S %p"  # MIND behaviors time format, 12-hour with AM/PM
+IMP_TOKEN_RE = re.compile(r"^(N\d+)-([01])$")
+NEWS_ID_RE = re.compile(r"^N\d+$")
+
+
+# -------------------------------
+# Utilities
+# -------------------------------
+
+def parse_history_field(s: str) -> List[str]:
+    s = (s or "").strip()
+    return s.split() if s else []
+
+
+def parse_impressions_field(s: str) -> List[Tuple[str, int]]:
+    res = []
+    for tok in (s or "").split():
+        m = IMP_TOKEN_RE.match(tok)
+        if m:
+            res.append((m.group(1), int(m.group(2))))
+    return res
+
+
+def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
+    return pd.read_csv(
+        path,
+        sep="\t",
+        dtype="string",
+        header=None,
+        na_filter=False,
+        quoting=csv.QUOTE_NONE,
+        engine="python",
+        on_bad_lines="skip",
+        **kwargs,
+    )
+
+
+def read_news_meta(news_path: Path) -> pd.DataFrame:
+    """
+    尝试解析 news.tsv 的前几列：
+    [0]=news_id, [1]=category, [2]=subcategory, [3]=title, [4]=abstract ...
+    若列不足，按可得字段降级。
+    """
+    df = safe_read_csv(news_path, names=[0, 1, 2, 3, 4], usecols=[0, 1, 2, 3, 4])
+    df = df.rename(columns={0: "news_id", 1: "category", 2: "subcategory"})
+    df["news_id"] = df["news_id"].astype(str)
+    df["category"] = df["category"].fillna("")
+    df["subcategory"] = df["subcategory"].fillna("")
+    # 仅保留合法 news_id 行
+    df = df[df["news_id"].str.match(NEWS_ID_RE, na=False)].reset_index(drop=True)
+    return df[["news_id", "category", "subcategory"]]
+
+
+def read_behaviors(beh_path: Path, max_rows: Optional[int] = None) -> pd.DataFrame:
+    cols = ["impression_id", "user_id", "timestamp", "history", "impressions"]
+    df = safe_read_csv(beh_path, names=cols, nrows=max_rows)
+    # 解析时间
+    def _parse_ts(x: str) -> datetime:
+        try:
+            return datetime.strptime(x, TS_FMT)
+        except Exception:
+            return pd.NaT
+    df["dt"] = df["timestamp"].map(_parse_ts)
+    # 解析结构字段
+    df["history_list"] = df["history"].map(parse_history_field)
+    df["impr_list"] = df["impressions"].map(parse_impressions_field)
+    # 丢弃时间为空的行（极少）
+    df = df[~df["dt"].isna()].reset_index(drop=True)
+    return df
+
+
+def weighted_popularity(df_beh: pd.DataFrame) -> Counter:
+    """
+    热度权重：
+      - 点击（label=1）：+3
+      - 未点（label=0）：+1
+      - 历史中的新闻：+2
+    """
+    cnt = Counter()
+    # impressions 中的点击/未点
+    for lst in df_beh["impr_list"]:
+        for nid, lab in lst:
+            if lab == 1:
+                cnt[nid] += 3
+            else:
+                cnt[nid] += 1
+    # 历史
+    for lst in df_beh["history_list"]:
+        for nid in lst:
+            cnt[nid] += 2
+    return cnt
+
+
+def choose_campaign_targets(
+    rng: random.Random,
+    news_ids: List[str],
+    df_beh: pd.DataFrame,
+    k: int,
+    category_of: Optional[Dict[str, str]] = None,
+    cross_topic: bool = False,
+) -> List[str]:
+    """
+    按加权热度选 Top-k；不足则随机补齐。
+    若 cross_topic=True，则尽量挑选类别不同的目标集合（轮转选取不同 category）。
+    """
+    cnt = weighted_popularity(df_beh)
+    ranked = [nid for nid, _ in cnt.most_common() if nid in set(news_ids)]
+    pool: List[str] = []
+    if cross_topic and category_of:
+        used_cat = set()
+        for nid in ranked:
+            cat = category_of.get(nid, "")
+            if cat not in used_cat:
+                pool.append(nid)
+                used_cat.add(cat)
+            if len(pool) >= k:
+                break
+    else:
+        pool = ranked[:k]
+
+    if len(pool) < k:
+        rest = [n for n in news_ids if n not in set(pool)]
+        rng.shuffle(rest)
+        pool.extend(rest[: (k - len(pool))])
+
+    if not pool:
+        pool = rng.sample(news_ids, min(k, len(news_ids)))
+    return pool[:k]
+
+
+def new_user_ids(start_num: int, n_users: int) -> List[str]:
+    return [f"U{start_num + i}" for i in range(n_users)]
+
+
+def sample_timestamp(
+    rng: random.Random,
+    tmin: datetime,
+    tmax: datetime,
+    center: Optional[datetime] = None,
+    window_hours: int = 6,
+    jitter_minutes: int = 5,
+) -> datetime:
+    """
+    若给定 center，则从 [center - window, center] 采样；否则在 [tmin, tmax] 采样。
+    """
+    if center is not None:
+        start = center - timedelta(hours=window_hours)
+        if start < tmin:
+            start = tmin
+        span = max(0.0, (center - start).total_seconds())
+        offs = rng.random() * span
+        base = start + timedelta(seconds=offs)
+    else:
+        if tmax <= tmin:
+            base = tmin
+        else:
+            span = (tmax - tmin).total_seconds()
+            offs = rng.random() * span
+            base = tmin + timedelta(seconds=offs)
+
+    j = rng.randint(-jitter_minutes, jitter_minutes)
+    return base + timedelta(minutes=j)
+
+
+# -------------------------------
+# Core generation
+# -------------------------------
+
+@dataclass
+class GenConfig:
+    impr_size: int = 20
+    neg_per_pos: int = 19
+    campaign_k: int = 50
+    click_bias: float = 0.85        # P(pos from campaign) given campaign is used
+    use_campaign_base: float = 0.80 # 非爆发时启用活动池的概率
+    burst_frac: float = 0.33        # 新增曝光中处于“爆发块”的比例（近似）
+    burst_size: int = 20            # 每个爆发块的条数
+    burst_window_hours: int = 6     # 爆发时间窗长度
+    hist_cap: int = 5               # 历史累积上限（条数）
+    hist_mix_p: float = 0.20        # 在历史里混入随机非活动条目的概率
+    accumulate_history: bool = True
+    hard_coord: bool = True         # 爆发块内强制同一 target
+    cross_topic: bool = False       # 活动池尽量覆盖不同 category
+    avg_impr_per_bot: int = 5       # 平均每个机器人账号的曝光条数
+
+
+def generate_split(
+    split_dir: Path,
+    out_dir: Path,
+    bot_ratio: float,
+    seed: int,
+    cfg: GenConfig,
+    max_rows: Optional[int] = None,
+) -> Dict:
+    rng = random.Random(seed)
+
+    # 1) 读入原始数据
+    news_path = split_dir / "news.tsv"
+    beh_path = split_dir / "behaviors.tsv"
+    df_news = read_news_meta(news_path)
+    news_ids = df_news["news_id"].tolist()
+    cat_of = {r.news_id: (r.category or "") for r in df_news.itertuples(index=False)}
+
+    dfb = read_behaviors(beh_path, max_rows=max_rows)
+    n_orig = len(dfb)
+    if n_orig == 0:
+        raise RuntimeError(f"{split_dir} behaviors.tsv is empty or malformed.")
+
+    tmin, tmax = dfb["dt"].min(), dfb["dt"].max()
+
+    # 2) 选活动池
+    campaign_news = choose_campaign_targets(
+        rng, news_ids, dfb, cfg.campaign_k, category_of=cat_of, cross_topic=cfg.cross_topic
+    )
+
+    # 3) 计算新增条数 & 机器人账号数
+    n_bots_impr = max(0, int(n_orig * bot_ratio))
+    if n_bots_impr == 0:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # 复制不变文件
+        for fname in ["news.tsv","entity_embedding.vec","relation_embedding.vec"]:
+            shutil.copy2(split_dir / fname, out_dir / fname)
+        # behaviors.tsv 原样复制，保持 val/test 完全一致
+        shutil.copy2(beh_path, out_dir / "behaviors.tsv")
+        # 空占位
+        open(out_dir / "bot_users.txt", "w", encoding="utf-8").close()
+        open(out_dir / "campaign_news.txt", "w", encoding="utf-8").close()
+        meta = {
+            "split": split_dir.name,
+            "seed": seed,
+            "n_orig_impressions": n_orig,
+            "n_added_impressions": 0,
+            "bot_ratio": bot_ratio,
+            "bot_users": 0,
+            "campaign_k": 0,
+            "config": cfg.__dict__,
+        }
+        with (out_dir / "meta.json").open("w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        print(f"[OK] {split_dir.name}: +0 synthetic impressions \u2192 total={n_orig}")
+        return meta
+    n_bot_users = max(1, n_bots_impr // max(1, cfg.avg_impr_per_bot))
+    bot_uid_start = 90000000
+    bot_users = new_user_ids(bot_uid_start, n_bot_users)
+
+    # 4) 预生成爆发块（目标 & 索引范围）
+    n_bursts = 0
+    burst_targets: List[str] = []
+    if cfg.hard_coord and cfg.burst_size >= 2 and n_bots_impr >= 2:
+        approx_in_burst = int(n_bots_impr * cfg.burst_frac)
+        n_bursts = max(1, approx_in_burst // cfg.burst_size) if approx_in_burst >= 2 else 0
+        for _ in range(n_bursts):
+            burst_targets.append(rng.choice(campaign_news) if campaign_news else rng.choice(news_ids))
+
+    # 5) 生成新增行
+    # - 用户轮转 + 历史累积缓存
+    user_ptr = 0
+    user_hist: Dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.hist_cap))
+
+    # - impression_id 续号（避免和原始冲突；稍后会重排）
+    max_imp_id = int(dfb["impression_id"].astype("int64").max()) if len(dfb) else 0
+    next_imp = max_imp_id + 1
+
+    new_rows = []
+
+    # - 预先决定哪些 i 处于爆发块，以及其目标
+    in_burst_flags = [False] * n_bots_impr
+    burst_target_for_i: List[Optional[str]] = [None] * n_bots_impr
+    if n_bursts > 0:
+        # 将前 n_bursts*burst_size 个样本分配为爆发块（连续分段），并随机打乱块的顺序
+        block_indices = list(range(n_bursts))
+        rng.shuffle(block_indices)
+        for b_idx in block_indices:
+            start = b_idx * cfg.burst_size
+            end = min((b_idx + 1) * cfg.burst_size, n_bots_impr)
+            for i in range(start, end):
+                in_burst_flags[i] = True
+                burst_target_for_i[i] = burst_targets[b_idx]
+        # 剩余的尾部 i 保持非爆发
+
+    # 6) 逐条生成
+    for i in range(n_bots_impr):
+        uid = bot_users[user_ptr]
+        user_ptr = (user_ptr + 1) % len(bot_users)
+
+        is_burst = in_burst_flags[i]
+        target = burst_target_for_i[i]
+
+        # 时间分布：爆发 → tmax 附近；非爆发 → 全时段
+        if is_burst:
+            ts = sample_timestamp(
+                rng, tmin, tmax,
+                center=tmax,
+                window_hours=cfg.burst_window_hours,
+                jitter_minutes=5,
+            )
+            use_campaign = True  # 爆发场景强制启用活动池
+        else:
+            ts = sample_timestamp(rng, tmin, tmax, center=None, jitter_minutes=15)
+            use_campaign = (rng.random() < cfg.use_campaign_base)
+
+        # 历史：累积 or 临时
+        if cfg.accumulate_history:
+            # 基于账号历史 + 少量扰动
+            hist = list(user_hist[uid])
+            if rng.random() < cfg.hist_mix_p:
+                # 混入随机新闻（优先非活动池）
+                noncamp = [n for n in news_ids if n not in set(campaign_news)]
+                if noncamp:
+                    hist = (hist + [rng.choice(noncamp)])[-cfg.hist_cap:]
+        else:
+            # 非累积：0~2 均匀（近似原脚本）
+            k = rng.randint(0, 2)
+            hist = []
+            for _ in range(k):
+                if campaign_news and rng.random() < 0.6:
+                    hist.append(rng.choice(campaign_news))
+                else:
+                    hist.append(rng.choice(news_ids))
+            # 去重但保序
+            seen = set(); uniq = []
+            for n in hist:
+                if n not in seen:
+                    uniq.append(n); seen.add(n)
+            hist = uniq
+
+        # 选正样本
+        if is_burst and cfg.hard_coord and target is not None:
+            pos = target
+        else:
+            if use_campaign and campaign_news and (rng.random() < cfg.click_bias):
+                pos = rng.choice(campaign_news)
+            else:
+                pos = rng.choice(news_ids)
+
+        # 负样本（全局均匀抽，不与 pos 重复）
+        negs = set()
+        while len(negs) < cfg.neg_per_pos:
+            nid = rng.choice(news_ids)
+            if nid != pos:
+                negs.add(nid)
+
+        items = [(pos, 1)] + [(n, 0) for n in negs]
+        rng.shuffle(items)
+
+        # impression 组装
+        imp_id = next_imp; next_imp += 1
+        ts_str = ts.strftime(TS_FMT)
+        hist_str = " ".join(hist)
+        impr_str = " ".join(f"{nid}-{lab}" for nid, lab in items)
+        new_rows.append((imp_id, uid, ts_str, hist_str, impr_str))
+
+        # 历史累积：把这次正样本写回
+        if cfg.accumulate_history:
+            user_hist[uid].append(pos)
+
+    # 7) 合并 & 排序 & 重排 impression_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # 拷贝不变文件
+    for fname in ["news.tsv", "entity_embedding.vec", "relation_embedding.vec"]:
+        shutil.copy2(split_dir / fname, out_dir / fname)
+
+    df_new = pd.DataFrame(new_rows, columns=["impression_id","user_id","timestamp","history","impressions"])
+    df_all = pd.concat(
+        [dfb[["impression_id","user_id","timestamp","history","impressions"]], df_new],
+        ignore_index=True
+    )
+    # 排序
+    df_all["dt"] = pd.to_datetime(df_all["timestamp"], format=TS_FMT, errors="coerce")
+    df_all = df_all.sort_values("dt").reset_index(drop=True)
+    df_all["impression_id"] = range(1, len(df_all) + 1)
+    df_all = df_all.drop(columns=["dt"])
+
+    # train/val 校验：确保 impressions 全是 Nxxxx-[01]
+    if split_dir.name in ("train",):
+        tokens = df_all["impressions"].str.split().explode()
+        bad = tokens[~tokens.str.contains(r"^N\d+-[01]$", na=False)]
+        if not bad.empty:
+            raise ValueError(f"[{split_dir.name}] unlabeled token: '{bad.iloc[0]}'")
+
+    # 写 behaviors.tsv
+    out_beh = out_dir / "behaviors.tsv"
+    df_all.to_csv(out_beh, sep="\t", header=False, index=False, quoting=csv.QUOTE_NONE)
+
+    # 写 meta
+    with (out_dir / "bot_users.txt").open("w", encoding="utf-8") as f:
+        for u in sorted(set(bot_users)):
+            f.write(f"{u}\n")
+    with (out_dir / "campaign_news.txt").open("w", encoding="utf-8") as f:
+        for n in campaign_news:
+            f.write(f"{n}\n")
+
+    meta = {
+        "split": split_dir.name,
+        "seed": seed,
+        "n_orig_impressions": n_orig,
+        "n_added_impressions": len(df_new),
+        "bot_ratio": bot_ratio,
+        "bot_users": len(set(bot_users)),
+        "campaign_k": len(campaign_news),
+        "config": cfg.__dict__,
+    }
+    with (out_dir / "meta.json").open("w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    print(f"[OK] {split_dir.name}: +{len(df_new)} synthetic impressions "
+          f"(bots={len(set(bot_users))}, bursts={len(burst_targets)}) "
+          f"→ total={len(df_all)}")
+    return meta
+
+
+# -------------------------------
+# Main
+# -------------------------------
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--src_dir", type=str, required=True, help="MIND-small root with train/val/test")
+    ap.add_argument("--dst_dir", type=str, required=True, help="Output directory")
+
+    # 比例（建议：只污染 train；val/test 保持干净或极低）
+    ap.add_argument("--bot_ratio_train", type=float, default=0.30)
+    ap.add_argument("--bot_ratio_val",   type=float, default=0.00)
+    ap.add_argument("--bot_ratio_test",  type=float, default=0.00)
+
+    # 候选/点击
+    ap.add_argument("--impr_size", type=int, default=20)
+    ap.add_argument("--neg_per_pos", type=int, default=19)
+    ap.add_argument("--campaign_k", type=int, default=20)
+    ap.add_argument("--click_bias", type=float, default=0.90)
+    ap.add_argument("--use_campaign_base", type=float, default=0.90)
+
+    # 协同爆发
+    ap.add_argument("--burst_frac", type=float, default=0.33)
+    ap.add_argument("--burst_size", type=int, default=30)
+    ap.add_argument("--burst_window_hours", type=int, default=6)
+
+    # 历史
+    ap.add_argument("--hist_cap", type=int, default=6)
+    ap.add_argument("--hist_mix_p", type=float, default=0.20)
+    ap.add_argument("--accumulate_history", type=int, default=1, help="1/0")
+
+    # 策略
+    ap.add_argument("--hard_coord", type=int, default=1, help="1/0: enforce same target within burst")
+    ap.add_argument("--cross_topic", type=int, default=0, help="1/0: diversify campaign categories if possible")
+
+    # 账号
+    ap.add_argument("--avg_impr_per_bot", type=int, default=5)
+
+    # 其他
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--max_train_impressions", type=int, default=None)
+    ap.add_argument("--max_val_impressions", type=int, default=None)
+    ap.add_argument("--max_test_impressions", type=int, default=None)
+
+    args = ap.parse_args()
+
+    src = Path(args.src_dir)
+    dst = Path(args.dst_dir)
+    assert (src / "train").exists() and (src / "val").exists() and (src / "test").exists(), \
+        "src_dir must contain train/val/test"
+
+    for sp in ["train", "val", "test"]:
+        (dst / sp).mkdir(parents=True, exist_ok=True)
+
+    cfg = GenConfig(
+        impr_size=args.impr_size,
+        neg_per_pos=args.neg_per_pos,
+        campaign_k=args.campaign_k,
+        click_bias=args.click_bias,
+        use_campaign_base=args.use_campaign_base,
+        burst_frac=args.burst_frac,
+        burst_size=max(2, int(args.burst_size)),
+        burst_window_hours=args.burst_window_hours,
+        hist_cap=args.hist_cap,
+        hist_mix_p=args.hist_mix_p,
+        accumulate_history=bool(args.accumulate_history),
+        hard_coord=bool(args.hard_coord),
+        cross_topic=bool(args.cross_topic),
+        avg_impr_per_bot=args.avg_impr_per_bot,
+    )
+
+    split_cfgs = [
+        ("train", float(args.bot_ratio_train), args.max_train_impressions, 0),
+        ("val",   float(args.bot_ratio_val),   args.max_val_impressions,   1),
+        ("test",  float(args.bot_ratio_test),  args.max_test_impressions,  2),
+    ]
+
+    metas = {}
+    for sp, ratio, max_rows, split_offset in split_cfgs:
+        metas[sp] = generate_split(
+            split_dir=src / sp,
+            out_dir=dst / sp,
+            bot_ratio=max(0.0, ratio),
+            seed=int(args.seed) + int(split_offset),
+            cfg=cfg,
+            max_rows=max_rows
+        )
+
+    # 汇总
+    summary = {
+        "src_dir": str(src),
+        "dst_dir": str(dst),
+        "seed": int(args.seed),
+        "config": cfg.__dict__,
+        "splits": metas,
+    }
+    with (dst / "SUMMARY.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    print("\n[Done] Synthetic dataset written to:", dst)
+
+
+if __name__ == "__main__":
+    main()

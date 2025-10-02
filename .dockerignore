@@ -1,0 +1,23 @@
+# Keep image lean and builds reproducible
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Large runtime artifacts – mount these at runtime
+data/
+logs/
+outputs/
+checkpoint/
+wandb/
+
+# Local venvs and editors
+venv/
+.venv/
+.idea/
+.vscode/
+*.swp
+*.swo
+
